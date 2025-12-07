@@ -60,19 +60,39 @@ applications
 tasks
 
 # Common columns:
-sqlid uuid primary key default gen_random_uuid(),
+-- Common columns used across all tables
+id uuid primary key default gen_random_uuid(),
 tenant_id uuid not null,
 created_at timestamptz default now(),
-updated_at timestamptz default now()
-Application Relationships
-sqlapplications.lead_id → leads.id (FK)
-tasks.application_id → applications.id (FK)
-Allowed Task Types
-sqlcall | email | review
-Constraint: due_at must be in the future
-sqlcheck (due_at >= created_at)
-Indexing strategy (high performance)
-TableIndexesPurposeleadstenant_id, owner_id, stagemulti-tenant filteringapplicationstenant_id, lead_idfast joinstaskstenant_id, due_at, statusdashboard queries
+updated_at timestamptz default now();
+
+-- Allowed Task Types
+CHECK (type IN ('call', 'email', 'review'));
+
+-- Task deadline constraint
+CHECK (due_at >= created_at);
+
+-- Foreign Keys
+alter table applications
+add constraint applications_lead_fk
+foreign key (lead_id) references leads(id);
+
+alter table tasks
+add constraint tasks_application_fk
+foreign key (application_id) references applications(id);
+
+-- Indexes for high-performance querying
+create index leads_tenant_idx on leads (tenant_id);
+create index leads_owner_idx on leads (owner_id);
+create index leads_stage_idx on leads (stage);
+
+create index applications_tenant_idx on applications (tenant_id);
+create index applications_lead_idx on applications (lead_id);
+
+create index tasks_tenant_idx on tasks (tenant_id);
+create index tasks_due_at_idx on tasks (due_at);
+create index tasks_status_idx on tasks (status);
+
 
 # Row Level Security (RLS)
 Located in: backend/rls_policies.sql
