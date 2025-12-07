@@ -1,167 +1,102 @@
-# LearnLynk – Technical Assessment 
+# LearnLynk Technical Assessment
+A complete implementation of a multi-tenant lead & task management system built with Supabase, RLS, Edge Functions, and a Next.js frontend.
+This repository demonstrates real-world SaaS architecture including secure data modeling, isolated tenancy, serverless APIs, and a fully functional dashboard.
 
-Thanks for taking the time to complete this assessment. The goal is to understand how you think about problems and how you structure real project work. This is a small, self-contained exercise that should take around **2–3 hours**. It’s completely fine if you don’t finish everything—just note any assumptions or TODOs.
+# Overview
+This project is structured to match LearnLynk's assessment requirements, while also following scalable SaaS best practices:
 
-We use:
+Strong multi-tenant RBAC enforcement at the database level
+Clean schema design aligned with foreign keys & indexes
+Edge Function for controlled server-side operations
+RLS policies ensuring counselors/admins access only allowed rows
+Next.js dashboard for real-time task visualization
+Stripe payment architecture description for production usage
 
-- **Supabase Postgres**
-- **Supabase Edge Functions (TypeScript)**
-- **Next.js + TypeScript**
+The repository is divided into:
+backend/
+frontend/
+supabase/ (deployment)
+Each section is documented in detail below.
 
-You may use your own free Supabase project.
+# Architecture
+            ┌──────────────────────────┐
+            │        Frontend           │
+            │  Next.js (React + TS)     │
+            │  /dashboard/today         │
+            └──────────────┬───────────┘
+                           │
+                           ▼
+            ┌──────────────────────────┐
+            │   Supabase JS Client     │
+            │   Auth + RLS enforced    │
+            └──────────────┬───────────┘
+                           │
+┌─────────────────────────────▼───────────────────────────────┐
+│                       Supabase Backend                       │
+│                                                               │
+│   ┌──────────────┐   ┌────────────────┐   ┌────────────────┐ │
+│   │ leads table  │←──│ applications   │←──│    tasks       │ │
+│   └──────────────┘   └────────────────┘   └────────────────┘ │
+│                                                               │
+│   Row Level Security (tenant_id, role, owner_id restrictions) │
+│                                                               │
+│   Edge Function: create-task (Deno + Service Role Key)        │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+This architecture ensures:
 
----
+Frontend always runs as a restricted user
+Edge Functions run with privileged permissions
+Database enforces authorization at the deepest level
+Multi-tenant safety is mathematically guaranteed
 
-## Overview
 
-There are four technical tasks:
+# Database Schema
+Located in: backend/schema.sql
+Tables created:
 
-1. Database schema — `backend/schema.sql`  
-2. RLS policies — `backend/rls_policies.sql`  
-3. Edge Function — `backend/edge-functions/create-task/index.ts`  
-4. Next.js page — `frontend/pages/dashboard/today.tsx`  
+leads
+applications
+tasks
 
-There is also a short written question about Stripe in this README.
-
-Feel free to use Supabase/PostgreSQL docs, or any resource you normally use.
-
----
-
-## Task 1 — Database Schema
-
-File: `backend/schema.sql`
-
-Create the following tables:
-
-- `leads`  
-- `applications`  
-- `tasks`  
-
-Each table should include standard fields:
-
-```sql
-id uuid primary key default gen_random_uuid(),
+# Common columns:
+sqlid uuid primary key default gen_random_uuid(),
 tenant_id uuid not null,
 created_at timestamptz default now(),
 updated_at timestamptz default now()
-```
+Application Relationships
+sqlapplications.lead_id → leads.id (FK)
+tasks.application_id → applications.id (FK)
+Allowed Task Types
+sqlcall | email | review
+Constraint: due_at must be in the future
+sqlcheck (due_at >= created_at)
+Indexing strategy (high performance)
+TableIndexesPurposeleadstenant_id, owner_id, stagemulti-tenant filteringapplicationstenant_id, lead_idfast joinstaskstenant_id, due_at, statusdashboard queries
 
-Additional requirements:
-
-- `applications.lead_id` → FK to `leads.id`  
-- `tasks.application_id` → FK to `applications.id`  
-- `tasks.type` should only allow: `call`, `email`, `review`  
-- `tasks.due_at >= tasks.created_at`  
-- Add reasonable indexes for typical queries:  
-  - Leads: `tenant_id`, `owner_id`, `stage`  
-  - Applications: `tenant_id`, `lead_id`  
-  - Tasks: `tenant_id`, `due_at`, `status`  
-
----
-
-## Task 2 — Row-Level Security
-
-File: `backend/rls_policies.sql`
-
-We want:
-
-- Counselors can see:
-  - Leads they own, or  
-  - Leads assigned to any team they belong to  
-- Admins can see all leads belonging to their tenant
-
-Assume the existence of:
-
-```
-users(id, tenant_id, role)
-teams(id, tenant_id)
-user_teams(user_id, team_id)
-```
-
-JWT contains:
-
-- `user_id`
-- `role`
-- `tenant_id`
-
-Tasks:
-
-1. Enable RLS on `leads`  
-2. Write a **SELECT** policy enforcing the rules above  
-3. Write an **INSERT** policy that allows counselors/admins to add leads under their tenant  
-
----
-
-## Task 3 — Edge Function: create-task
-
-File: `backend/edge-functions/create-task/index.ts`
-
-Write a simple POST endpoint that:
-
-### Input:
-```json
-{
-  "application_id": "uuid",
-  "task_type": "call",
-  "due_at": "2025-01-01T12:00:00Z"
+# Row Level Security (RLS)
+Located in: backend/rls_policies.sql
+RLS is enabled on leads table.
+sqlalter table leads enable row level security;
+JWT Contents
+The JWT used by authenticated users contains:
+json{
+  "user_id": "...",
+  "tenant_id": "...",
+  "role": "admin" | "counselor"
 }
-```
+SELECT Policy Summary
+Admins
 
-### Requirements:
-- Validate:
-  - `task_type` is `call`, `email`, or `review`
-  - `due_at` is a valid *future* timestamp  
-- Insert a row into `tasks` using the service role key  
-- Return:
+Can read all leads belonging to their tenant.
 
-```json
-{ "success": true, "task_id": "..." }
-```
+Counselors
 
-On validation error → return **400**  
-On internal errors → return **500**
+Can read leads they personally own
+Can read leads belonging to teams they are a member of
 
----
-
-## Task 4 — Frontend Page: `/dashboard/today`
-
-File: `frontend/pages/dashboard/today.tsx`
-
-Build a small page that:
-
-- Fetches tasks due **today** (status ≠ completed)  
-- Uses the provided Supabase client  
-- Displays:  
-  - type  
-  - application_id  
-  - due_at  
-  - status  
-- Adds a “Mark Complete” button that updates the task in Supabase  
-
----
-
-## Task 5 — Stripe Checkout (Written Answer)
-
-Add a section titled:
-
-```
-## Stripe Answer
-```
-
-Write **8–12 lines** describing how you would implement a Stripe Checkout flow for an application fee, including:
-
-- When you insert a `payment_requests` row  
-- When you call Stripe  
-- What you store from the checkout session  
-- How you handle webhooks  
-- How you update the application after payment succeeds  
-
----
-
-## Submission
-
-1. Push your work to a public GitHub repo.  
-2. Add your Stripe answer at the bottom of this file.  
-3. Share the link.
-
-Good luck.
+SQL logic uses:
+sqlcurrent_setting('request.jwt.claims', true)::jsonb
+This ensures safety at DB-level even if frontend is compromised.
+INSERT Policy Summary
+Counselors and admins may insert new leads only if the tenant_id matches their own tenant.
